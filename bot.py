@@ -29,7 +29,7 @@ def main():
     # --- LOSOWE OPÓŹNIENIE STARTU (po 17:30) ---
     # Cron ustawimy na 17:30 UTC. Dodatkowe opóźnienie (0-4h) sprawi,
     # że bot wystartuje między 17:30 a 21:30, co wygląda naturalnie.
-    losowe_opoznienie = random.randint(0, 4 * 3600)  # 0-4 godziny w sekundach
+    losowe_opoznienie = 0  # 0-4 godziny w sekundach
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
