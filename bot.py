@@ -73,7 +73,7 @@ def main():
     print("Sesja zakończona.")
 
 if __name__ == "__main__":
-    main
+    main()
   
 
 
