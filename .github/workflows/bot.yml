@@ -27,22 +27,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium requests
 
-      - name: Przywróć cache trudnych słów
+      - name: Przywróć cache (trudne + nauczone)
         uses: actions/cache@v4
         with:
-          path: trudne.json
-          key: trudne-${{ github.run_id }}
+          path: |
+            trudne.json
+            nauczone.json
+          key: dane-${{ github.run_id }}
           restore-keys: |
-            trudne-
+            dane-
 
       - name: Uruchom bota
         env:
           INSTALING_EMAIL: ${{ secrets.INSTALING_EMAIL }}
           INSTALING_PASSWORD: ${{ secrets.INSTALING_PASSWORD }}
-        run: python bot.py
+        run: python -u bot.py
 
-      - name: Zapisz cache trudnych słów
+      - name: Zapisz cache (trudne + nauczone)
         uses: actions/cache@v4
         with:
-          path: trudne.json
-          key: trudne-${{ github.run_id }}
+          path: |
+            trudne.json
+            nauczone.json
+          key: dane-${{ github.run_id }}
