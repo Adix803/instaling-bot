@@ -171,7 +171,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = random.randint(0, 9000)  # 0-2.5h -> 17:30-20:00 PL zimą
+    losowe_opoznienie = random.randint(0, 25200)  # 0-7h -> 16:30-23:30 PL  # 0-2.5h -> 17:30-20:00 PL zimą
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
