@@ -14,7 +14,6 @@ EMAIL = os.environ.get("INSTALING_EMAIL")
 PASSWORD = os.environ.get("INSTALING_PASSWORD")
 TRUDNE_FILE = "trudne.json"
 
-# Ile słówek ma być dobrze za pierwszym razem (z 20)
 POPRAWNE_ZA_PIERWSZYM = random.randint(10, 17)
 
 
@@ -63,7 +62,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.")
         return
 
-    losowe_opoznienie = 0
+    losowe_opoznienie = random.randint(0, 6 * 3600)
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
@@ -78,12 +77,8 @@ def main():
     driver = webdriver.Chrome(options=options)
     wait = WebDriverWait(driver, 20)
 
-    # słowa po literówce – mają być powtórzone źle jeszcze raz, żeby zaliczyło jako błąd
     do_powtorzenia = {}
-
-    # licznik prawdziwych błędów zaliczonych (Niepoprawnie)
     liczba_bledow = 0
-    # ile błędów maksymalnie chcemy
     docelowa_liczba_bledow = 20 - POPRAWNE_ZA_PIERWSZYM
 
     try:
@@ -97,13 +92,6 @@ def main():
         driver.find_element(By.XPATH, "//button[@type='submit']").click()
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}")
-
-                try:
-            driver.find_element(By.ID, "captcha")
-            print("CAPTCHA WYKRYTA – przerywam pracę.")
-            return
-        except Exception:
-            pass
 
         # --- Start / Kontynuacja sesji ---
         try:
@@ -122,13 +110,7 @@ def main():
         licznik_poprawnych = 0
         maks_proby = 300
 
-                    try:
-                driver.find_element(By.ID, "captcha")
-                print("CAPTCHA WYKRYTA – przerywam.")
-                break
-            except Exception:
-                pass
-
+        for i in range(maks_proby):
             try:
                 pole = wait.until(EC.presence_of_element_located((By.ID, "answer")))
             except Exception:
@@ -151,9 +133,7 @@ def main():
 
             time.sleep(random.uniform(3, 12))
 
-            # --- Wybierz odpowiedź ---
             if powtarzamy:
-                # druga literówka → ma zaliczyć jako błąd
                 odp = zrob_blad(tlumacz(hint))
                 print(f"     Literówka #2 (ma być błąd): {odp}")
                 del do_powtorzenia[hint]
@@ -161,7 +141,6 @@ def main():
                 odp = trudne[hint]
                 print(f"     Zapisana poprawna: {odp}")
             elif licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= docelowa_liczba_bledow:
-                # już zrobiliśmy wymaganą liczbę błędów → teraz same poprawne
                 odp = tlumacz(hint)
                 print(f"     Tłumaczenie (po błędach): {odp}")
                 licznik_poprawnych += 1
@@ -170,7 +149,6 @@ def main():
                 print(f"     Tłumaczenie: {odp}")
                 licznik_poprawnych += 1
             else:
-                # robimy błąd
                 odp = zrob_blad(tlumacz(hint))
                 print(f"     Literówka #1: {odp}")
 
@@ -178,7 +156,6 @@ def main():
             pole.send_keys(odp)
             time.sleep(random.uniform(1, 2))
 
-            # --- Sprawdź ---
             try:
                 driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
             except Exception as e:
@@ -187,7 +164,6 @@ def main():
 
             time.sleep(random.uniform(2, 4))
 
-            # --- Status ---
             try:
                 status = driver.find_element(By.ID, "sr_status").text.strip()
             except Exception:
@@ -196,7 +172,6 @@ def main():
 
             if "Niepoprawnie" in status:
                 liczba_bledow += 1
-                # zapisz poprawną odpowiedź
                 try:
                     poprawna_el = driver.find_element(
                         By.XPATH, "//div[@id='answer_result']//strong | //div[@id='answer_result']//b")
@@ -214,7 +189,6 @@ def main():
                     do_powtorzenia[hint] = True
                     print(f"     Literówka/synonim – słowo wróci, zapamiętane.")
 
-            # --- Dalej / Następne ---
             try:
                 driver.find_element(By.XPATH,
                     "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
