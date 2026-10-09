@@ -98,9 +98,12 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}")
 
-        if "captcha" in driver.page_source.lower():
-            print("CAPTCHA WYKRYTA – przerywam pracę. Wymagana ręczna weryfikacja.")
+                try:
+            driver.find_element(By.ID, "captcha")
+            print("CAPTCHA WYKRYTA – przerywam pracę.")
             return
+        except Exception:
+            pass
 
         # --- Start / Kontynuacja sesji ---
         try:
@@ -119,10 +122,12 @@ def main():
         licznik_poprawnych = 0
         maks_proby = 300
 
-        for i in range(maks_proby):
-            if "captcha" in driver.page_source.lower():
+                    try:
+                driver.find_element(By.ID, "captcha")
                 print("CAPTCHA WYKRYTA – przerywam.")
                 break
+            except Exception:
+                pass
 
             try:
                 pole = wait.until(EC.presence_of_element_located((By.ID, "answer")))
