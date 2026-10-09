@@ -14,30 +14,30 @@ from selenium.webdriver.support import expected_conditions as EC
 EMAIL = os.environ.get("INSTALING_EMAIL")
 PASSWORD = os.environ.get("INSTALING_PASSWORD")
 TRUDNE_FILE = "trudne.json"
+NAUCZONE_FILE = "nauczone.json"
 
 POPRAWNE_ZA_PIERWSZYM = random.randint(10, 17)
 DOCELOWA_LICZBA_BLEDOW = 20 - POPRAWNE_ZA_PIERWSZYM
 
 
-def wczytaj_trudne():
-    if os.path.exists(TRUDNE_FILE):
+def wczytaj_json(plik):
+    if os.path.exists(plik):
         try:
-            with open(TRUDNE_FILE, "r", encoding="utf-8") as f:
+            with open(plik, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
 
-def zapisz_trudne(dane):
-    with open(TRUDNE_FILE, "w", encoding="utf-8") as f:
+def zapisz_json(plik, dane):
+    with open(plik, "w", encoding="utf-8") as f:
         json.dump(dane, f, ensure_ascii=False, indent=2)
 
 
 def tlumacz(tekst):
     if not tekst:
         return ""
-    # próbuj MyMemory
     try:
         r = requests.get(
             "https://api.mymemory.translated.net/get",
@@ -49,7 +49,6 @@ def tlumacz(tekst):
             return wynik
     except Exception:
         pass
-    # fallback: Google Translate przez darmowy endpoint
     try:
         r = requests.get(
             "https://translate.googleapis.com/translate_a/single",
@@ -58,8 +57,54 @@ def tlumacz(tekst):
         )
         return r.json()[0][0][0].strip()
     except Exception as e:
-        print(f"Błąd tłumaczenia: {e}")
+        print(f"Błąd tłumaczenia: {e}", flush=True)
         return tekst
+
+
+def dopasuj_do_zdania(odp, pytanie):
+    """Czyta zdanie i dopasowuje odpowiedź:
+    - usuwa the/a/an, jeśli w zdaniu już jest
+    - próbuje liczby mnogiej, jeśli zdanie sugeruje mnogą"""
+    if not odp or not pytanie:
+        return odp
+
+    # --- Usuń przedimek jeśli już jest w zdaniu przed luką ---
+    if "___" in pytanie:
+        przed = pytanie.split("___")[0].strip().lower()
+        slowa_przed = przed.split()
+        ostatnie = slowa_przed[-1] if slowa_przed else ""
+        if ostatnie in ("the", "a", "an"):
+            for art in ("the ", "a ", "an "):
+                if odp.lower().startswith(art):
+                    odp = odp[len(art):].strip()
+                    break
+        # jeśli w zdaniu przed luką jest "the/a/an" gdziekolwiek blisko
+        if " the " in f" {przed} " or " a " in f" {przed} " or " an " in f" {przed} ":
+            slowa_odp = odp.split()
+            if len(slowa_odp) >= 2 and slowa_odp[0].lower() in ("the", "a", "an"):
+                odp = " ".join(slowa_odp[1:])
+
+    # --- Sprawdź liczbę mnogą ---
+    if "___" in pytanie:
+        przed = pytanie.split("___")[0].lower()
+        # wskaźniki mnogiej liczby przed luką
+        mnogie = ["some", "many", "few", "these", "those", "several", "two", "three", "a lot of"]
+        # wskaźniki po luce (np. "___ are")
+        po = pytanie.split("___")[1].lower() if len(pytanie.split("___")) > 1 else ""
+        sugeruje_mnogą = any(m in przed.split() for m in mnogie) or po.strip().startswith("are")
+
+        if sugeruje_mnogą and odp and not odp.endswith("s"):
+            # spróbuj dodać 's' (prosta heurystyka)
+            if odp.endswith("y"):
+                odp_mnoga = odp[:-1] + "ies"
+            elif odp.endswith(("s", "sh", "ch", "x", "z")):
+                odp_mnoga = odp + "es"
+            else:
+                odp_mnoga = odp + "s"
+            print(f"     (zdanie sugeruje mnogą: '{odp}' -> '{odp_mnoga}')", flush=True)
+            odp = odp_mnoga
+
+    return odp
 
 
 def zrob_blad(slowo):
@@ -83,17 +128,11 @@ def get_text_js(driver, by, selector):
 
 
 def wyciagnij_poprawna(status_text):
-    """Wyciąga poprawną odpowiedź z tekstu statusu, np.
-    'Niepoprawnie Poprawna odpowiedź: hairdresser's' -> hairdresser's"""
     if not status_text:
         return ""
-    # szukaj po "Poprawna odpowiedź:" (polski i angielski)
     m = re.search(r"Poprawna odpowied[źz]?:?\s*(.+)", status_text, re.IGNORECASE)
     if m:
-        wynik = m.group(1).strip()
-        # usuń ewentualne śmieci
-        wynik = wynik.split("\n")[0].strip()
-        return wynik
+        return m.group(1).split("\n")[0].strip()
     return ""
 
 
@@ -112,14 +151,14 @@ def wpisz_odpowiedz(driver, tekst):
             pole.send_keys(tekst)
             return True
         except Exception as e:
-            print(f"     Próba {proba+1} wpisania nie udała się: {e}")
+            print(f"     Próba {proba+1} wpisania: {e}", flush=True)
             time.sleep(2)
     try:
         pole = driver.find_element(By.ID, "answer")
         driver.execute_script("arguments[0].value = arguments[1];", pole, tekst)
         return True
     except Exception as e:
-        print(f"     JS fallback też nie zadziałał: {e}")
+        print(f"     JS fallback: {e}", flush=True)
         return False
 
 
@@ -138,16 +177,17 @@ def wybierz_akcje(licznik_poprawnych, liczba_bledow):
 
 def main():
     if date.today() >= date(2027, 6, 1):
-        print("Bot wyłączony – minęła data 2027-06-01.")
+        print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = 0  # TEST
-    print(f"Bot startuje za {losowe_opoznienie} sekund...")
+    losowe_opoznienie = random.randint(0, 6 * 3600)
+    print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
 
-    trudne = wczytaj_trudne()
-    print(f"Załadowano {len(trudne)} znanych słów z trudne.json", flush=True)
+    trudne = wczytaj_json(TRUDNE_FILE)
+    nauczone = wczytaj_json(NAUCZONE_FILE)  # {zdanie: odpowiedź}
+    print(f"Załadowano {len(trudne)} słów i {len(nauczone)} zdań", flush=True)
 
     options = Options()
     options.add_argument("--headless=new")
@@ -158,6 +198,7 @@ def main():
     driver = webdriver.Chrome(options=options)
 
     do_powtorzenia = {}
+    ocenione = {}
     liczba_bledow = 0
     licznik_poprawnych = 0
 
@@ -175,13 +216,13 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}", flush=True)
 
-        # --- Start / Kontynuacja sesji ---
+        # --- Start / Kontynuacja ---
         try:
             btn = WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
                 (By.XPATH,
                  "//button[contains(text(), 'Rozpocznij sesję')] | //a[contains(text(), 'Dokończ sesję')] | //button[contains(text(), 'Dokończ sesję')]")))
             btn.click()
-            print("Kliknięto Rozpocznij/Dokończ sesję.", flush=True)
+            print("Kliknięto start sesji.", flush=True)
             time.sleep(random.uniform(3, 5))
         except Exception as e:
             print(f"Nie znaleziono przycisku startu: {e}", flush=True)
@@ -225,8 +266,15 @@ def main():
                 print("     Pusty hint – pomijam.", flush=True)
                 continue
 
-            # --- Wybierz akcję ---
-            if hint in do_powtorzenia:
+            # --- Kolejność sprawdzeń ---
+            juz_ocenione = hint in ocenione
+            znam_zdanie = pytanie in nauczone
+
+            if juz_ocenione:
+                akcja = "poprawna_bez_liczenia"
+            elif znam_zdanie:
+                akcja = "poprawna_z_zdania"
+            elif hint in do_powtorzenia:
                 akcja = "blad_2"
             elif hint in trudne:
                 akcja = "poprawna_zapisana"
@@ -235,15 +283,23 @@ def main():
 
             time.sleep(random.uniform(3, 12))
 
-            if akcja == "blad_2":
+            if akcja == "poprawna_bez_liczenia":
+                odp = nauczone.get(pytanie) or trudne.get(hint) or tlumacz(hint)
+                odp = dopasuj_do_zdania(odp, pytanie)
+                print(f"     Już ocenione – poprawiam: {odp}", flush=True)
+            elif akcja == "poprawna_z_zdania":
+                odp = nauczone[pytanie]
+                print(f"     Znam to zdanie! Użyję zapisanej: {odp}", flush=True)
+            elif akcja == "blad_2":
                 odp = zrob_blad(tlumacz(hint))
-                print(f"     Literówka #2 (ma być błąd): {odp}", flush=True)
+                print(f"     Literówka #2: {odp}", flush=True)
                 del do_powtorzenia[hint]
             elif akcja == "poprawna_zapisana":
-                odp = trudne[hint]
+                odp = dopasuj_do_zdania(trudne[hint], pytanie)
                 print(f"     Zapisana poprawna: {odp}", flush=True)
             elif akcja == "poprawna":
                 odp = tlumacz(hint)
+                odp = dopasuj_do_zdania(odp, pytanie)
                 print(f"     Tłumaczenie (poprawna): {odp}", flush=True)
             else:
                 odp = zrob_blad(tlumacz(hint))
@@ -268,30 +324,39 @@ def main():
             status = get_text_js(driver, By.ID, "sr_status")
             print(f"     Status: {status}", flush=True)
 
-            # wyciągnij poprawną odpowiedź ze statusu
             poprawna_ze_statusu = wyciagnij_poprawna(status)
 
+            # --- ZAPISZ ZDANIE + ODPOWIEDŹ ---
+            if poprawna_ze_statusu and pytanie:
+                nauczone[pytanie] = poprawna_ze_statusu
+                zapisz_json(NAUCZONE_FILE, nauczone)
+                print(f"     Zapisano zdanie: {pytanie[:50]}... -> {poprawna_ze_statusu}", flush=True)
+
+            # --- LICZENIE (tylko pierwsza próba) ---
             if "Dobrze" in status:
-                licznik_poprawnych += 1
-                print(f"     >>> Dobrze! Razem poprawnych: {licznik_poprawnych}", flush=True)
+                if not juz_ocenione:
+                    ocenione[hint] = "correct"
+                    licznik_poprawnych += 1
+                    print(f"     >>> DOBRZE. Poprawnych: {licznik_poprawnych}", flush=True)
+                else:
+                    print(f"     >>> Dobrze (powtórka)", flush=True)
+
             elif "Niepoprawnie" in status:
-                liczba_bledow += 1
-                if poprawna_ze_statusu and hint:
-                    # zapisz TYLKO jeśli różni się od tego co próbowaliśmy
-                    if poprawna_ze_statusu.lower() != odp.lower():
-                        trudne[hint] = poprawna_ze_statusu
-                        zapisz_trudne(trudne)
-                        print(f"     Zapisano z odpowiedzi: {hint} -> {poprawna_ze_statusu}", flush=True)
-                print(f"     >>> Błąd zaliczony. Razem błędów: {liczba_bledow}", flush=True)
+                if not juz_ocenione:
+                    ocenione[hint] = "wrong"
+                    liczba_bledow += 1
+                    print(f"     >>> BŁĄD. Błędów: {liczba_bledow}", flush=True)
+                else:
+                    print(f"     >>> Niepoprawnie (powtórka)", flush=True)
+
+                if poprawna_ze_statusu and hint and poprawna_ze_statusu.lower() != odp.lower():
+                    trudne[hint] = poprawna_ze_statusu
+                    zapisz_json(TRUDNE_FILE, trudne)
+
             elif "Literówka" in status or "Synonim" in status:
-                if hint:
+                if hint and not juz_ocenione:
                     do_powtorzenia[hint] = True
-                    # jeśli pokazuje poprawną – zapisz ją od razu
-                    if poprawna_ze_statusu and poprawna_ze_statusu.lower() != odp.lower():
-                        trudne[hint] = poprawna_ze_statusu
-                        zapisz_trudne(trudne)
-                        print(f"     Zapisano z literówki: {hint} -> {poprawna_ze_statusu}", flush=True)
-                    print(f"     Literówka/synonim – zapamiętane.", flush=True)
+                    print(f"     Literówka/synonim – wróci, zrobię źle jeszcze raz.", flush=True)
 
             time.sleep(random.uniform(1, 2))
             try:
