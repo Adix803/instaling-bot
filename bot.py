@@ -1,80 +1,230 @@
 import os
+import json
 import random
 import time
-from instaling_client import InstalingClient
+from datetime import date
+import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# Pobierz dane logowania z GitHub Secrets
 EMAIL = os.environ.get("INSTALING_EMAIL")
 PASSWORD = os.environ.get("INSTALING_PASSWORD")
+TRUDNE_FILE = "trudne.json"
 
-# --- KONFIGURACJA ---
-# Losujemy, ile słówek ma być poprawnych za pierwszym razem (od 10 do 17)
+# Ile słówek ma być dobrze za pierwszym razem (z 20)
 POPRAWNE_ZA_PIERWSZYM = random.randint(10, 17)
 
+
+def wczytaj_trudne():
+    if os.path.exists(TRUDNE_FILE):
+        try:
+            with open(TRUDNE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def zapisz_trudne(dane):
+    with open(TRUDNE_FILE, "w", encoding="utf-8") as f:
+        json.dump(dane, f, ensure_ascii=False, indent=2)
+
+
+def tlumacz(tekst):
+    try:
+        r = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": tekst, "langpair": "pl|en"},
+            timeout=10,
+        )
+        return r.json()["responseData"]["translatedText"].strip()
+    except Exception as e:
+        print(f"Błąd tłumaczenia: {e}")
+        return tekst
+
+
 def zrob_blad(slowo):
-    """Zwraca słowo z symulowanym, ludzkim błędem."""
+    if not slowo:
+        return "x"
     opcje = [
-        # Zamiana dwóch sąsiednich liter (np. "recieve" -> "receive")
         lambda s: s[:-1] + s[-2] + s[-1] if len(s) > 2 else s + "x",
-        # Opuszczenie jednej litery (np. "beautiful" -> "beutiful")
         lambda s: s[:len(s)//2] + s[len(s)//2+1:] if len(s) > 3 else s,
-        # Podwojenie litery (np. "necessary" -> "neccessary")
         lambda s: s.replace("c", "cc", 1) if "c" in s else s + s[-1],
-        # Typowa pomyłka "ie" -> "ei"
         lambda s: s.replace("ie", "ei") if "ie" in s else s,
     ]
     return random.choice(opcje)(slowo)
 
+
 def main():
-    # --- LOSOWE OPÓŹNIENIE STARTU (po 17:30) ---
-    # Cron ustawimy na 17:30 UTC. Dodatkowe opóźnienie (0-4h) sprawi,
-    # że bot wystartuje między 17:30 a 21:30, co wygląda naturalnie.
-    losowe_opoznienie = 0  # 0-4 godziny w sekundach
+    if date.today() >= date(2027, 6, 1):
+        print("Bot wyłączony – minęła data 2027-06-01.")
+        return
+
+    losowe_opoznienie = random.randint(0, 6 * 3600)
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
-    client = InstalingClient()
+    trudne = wczytaj_trudne()
+
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+
+    driver = webdriver.Chrome(options=options)
+    wait = WebDriverWait(driver, 20)
+
+    # słowa po literówce – mają być powtórzone źle jeszcze raz, żeby zaliczyło jako błąd
+    do_powtorzenia = {}
+
+    # licznik prawdziwych błędów zaliczonych (Niepoprawnie)
+    liczba_bledow = 0
+    # ile błędów maksymalnie chcemy
+    docelowa_liczba_bledow = 20 - POPRAWNE_ZA_PIERWSZYM
+
     try:
-        client.login(EMAIL, PASSWORD)
+        # --- Logowanie ---
+        driver.get("https://instaling.pl/teacher.php?page=login")
+        time.sleep(random.uniform(2, 4))
+        wait.until(EC.presence_of_element_located((By.NAME, "log_email"))).send_keys(EMAIL)
+        time.sleep(random.uniform(1, 2))
+        driver.find_element(By.NAME, "log_password").send_keys(PASSWORD)
+        time.sleep(random.uniform(1, 2))
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
+        time.sleep(random.uniform(3, 5))
+        print(f"Po logowaniu: {driver.current_url}")
+
+        if "captcha" in driver.page_source.lower():
+            print("CAPTCHA WYKRYTA – przerywam pracę. Wymagana ręczna weryfikacja.")
+            return
+
+        # --- Start / Kontynuacja sesji ---
+        try:
+            btn = wait.until(EC.element_to_be_clickable(
+                (By.XPATH,
+                 "//button[contains(text(), 'Rozpocznij sesję')] | //a[contains(text(), 'Dokończ sesję')] | //button[contains(text(), 'Dokończ sesję')]")))
+            btn.click()
+            print("Kliknięto start/kontynuację sesji.")
+            time.sleep(random.uniform(3, 5))
+        except Exception as e:
+            print(f"Nie znaleziono przycisku sesji: {e}")
+            print(f"URL: {driver.current_url}")
+            return
+
+        # --- Pętla słówek ---
+        licznik_poprawnych = 0
+        maks_proby = 300
+
+        for i in range(maks_proby):
+            if "captcha" in driver.page_source.lower():
+                print("CAPTCHA WYKRYTA – przerywam.")
+                break
+
+            try:
+                pole = wait.until(EC.presence_of_element_located((By.ID, "answer")))
+            except Exception:
+                print("Koniec sesji – brak pola odpowiedzi.")
+                break
+
+            try:
+                hint = driver.find_element(By.ID, "question_translation").text.strip()
+            except Exception:
+                hint = ""
+            try:
+                pytanie = driver.find_element(By.ID, "question").text.strip()
+            except Exception:
+                pytanie = ""
+
+            print(f"[{i+1}] PL: {hint} | EN: {pytanie[:60]}")
+            print(f"     Postęp: poprawnych={licznik_poprawnych}, błędów={liczba_bledow}/{docelowa_liczba_bledow}")
+
+            powtarzamy = hint in do_powtorzenia
+
+            time.sleep(random.uniform(3, 12))
+
+            # --- Wybierz odpowiedź ---
+            if powtarzamy:
+                # druga literówka → ma zaliczyć jako błąd
+                odp = zrob_blad(tlumacz(hint))
+                print(f"     Literówka #2 (ma być błąd): {odp}")
+                del do_powtorzenia[hint]
+            elif hint in trudne:
+                odp = trudne[hint]
+                print(f"     Zapisana poprawna: {odp}")
+            elif licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= docelowa_liczba_bledow:
+                # już zrobiliśmy wymaganą liczbę błędów → teraz same poprawne
+                odp = tlumacz(hint)
+                print(f"     Tłumaczenie (po błędach): {odp}")
+                licznik_poprawnych += 1
+            elif licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM:
+                odp = tlumacz(hint)
+                print(f"     Tłumaczenie: {odp}")
+                licznik_poprawnych += 1
+            else:
+                # robimy błąd
+                odp = zrob_blad(tlumacz(hint))
+                print(f"     Literówka #1: {odp}")
+
+            pole.clear()
+            pole.send_keys(odp)
+            time.sleep(random.uniform(1, 2))
+
+            # --- Sprawdź ---
+            try:
+                driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
+            except Exception as e:
+                print(f"Nie znaleziono Sprawdź: {e}")
+                break
+
+            time.sleep(random.uniform(2, 4))
+
+            # --- Status ---
+            try:
+                status = driver.find_element(By.ID, "sr_status").text.strip()
+            except Exception:
+                status = ""
+            print(f"     Status: {status}")
+
+            if "Niepoprawnie" in status:
+                liczba_bledow += 1
+                # zapisz poprawną odpowiedź
+                try:
+                    poprawna_el = driver.find_element(
+                        By.XPATH, "//div[@id='answer_result']//strong | //div[@id='answer_result']//b")
+                    poprawna = poprawna_el.text.strip()
+                except Exception:
+                    poprawna = ""
+                if poprawna and hint:
+                    trudne[hint] = poprawna
+                    zapisz_trudne(trudne)
+                    print(f"     Zapisano: {hint} -> {poprawna}")
+                print(f"     >>> Błąd zaliczony. Razem błędów: {liczba_bledow}")
+
+            elif "Literówka" in status or "Synonim" in status:
+                if hint:
+                    do_powtorzenia[hint] = True
+                    print(f"     Literówka/synonim – słowo wróci, zapamiętane.")
+
+            # --- Dalej / Następne ---
+            try:
+                driver.find_element(By.XPATH,
+                    "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
+                time.sleep(random.uniform(1, 3))
+            except Exception:
+                pass
+
+        print(f"Koniec sesji. Poprawnych: {licznik_poprawnych}, błędów: {liczba_bledow}")
+
     except Exception as e:
-        print(f"Błąd logowania: {e}")
-        return
+        print(f"Błąd: {e}")
+        raise
+    finally:
+        driver.quit()
 
-    if client.session_completed:
-        print("Sesja na dziś jest już ukończona.")
-        return
-
-    print("Rozpoczynam dzisiejszą sesję...")
-
-    # Pobierz listę słówek. Nazwa metody może być inna – sprawdź w dokumentacji.
-    words = client.get_words()
-    licznik_poprawnych = 0
-
-    for word in words:
-        # Ludzkie opóźnienie między odpowiedziami
-        time.sleep(random.uniform(3, 12))
-
-        if licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM:
-            # Odpowiedz poprawnie
-            client.answer(word, word['poprawna_odpowiedz'])
-            licznik_poprawnych += 1
-        else:
-            # Odpowiedz z błędem
-            bledna_odpowiedz = zrob_blad(word['poprawna_odpowiedz'])
-            client.answer(word, bledna_odpowiedz)
-
-    # Po zakończeniu pierwszej rundy bot powinien poprawić błędy.
-    # Niektóre biblioteki robią to automatycznie, inne wymagają wywołania.
-    try:
-        client.finish_session()
-    except AttributeError:
-        pass
-
-    print("Sesja zakończona.")
 
 if __name__ == "__main__":
     main()
-  
-
-
-
