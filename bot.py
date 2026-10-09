@@ -16,7 +16,7 @@ PASSWORD = os.environ.get("INSTALING_PASSWORD")
 TRUDNE_FILE = "trudne.json"
 NAUCZONE_FILE = "nauczone.json"
 
-POPRAWNE_ZA_PIERWSZYM = random.randint(10, 17)
+POPRAWNE_ZA_PIERWSZYM = random.randint(14, 20)
 DOCELOWA_LICZBA_BLEDOW = 20 - POPRAWNE_ZA_PIERWSZYM
 
 
@@ -62,13 +62,9 @@ def tlumacz(tekst):
 
 
 def dopasuj_do_zdania(odp, pytanie):
-    """Czyta zdanie i dopasowuje odpowiedź:
-    - usuwa the/a/an, jeśli w zdaniu już jest
-    - próbuje liczby mnogiej, jeśli zdanie sugeruje mnogą"""
     if not odp or not pytanie:
         return odp
 
-    # --- Usuń przedimek jeśli już jest w zdaniu przed luką ---
     if "___" in pytanie:
         przed = pytanie.split("___")[0].strip().lower()
         slowa_przed = przed.split()
@@ -78,23 +74,18 @@ def dopasuj_do_zdania(odp, pytanie):
                 if odp.lower().startswith(art):
                     odp = odp[len(art):].strip()
                     break
-        # jeśli w zdaniu przed luką jest "the/a/an" gdziekolwiek blisko
         if " the " in f" {przed} " or " a " in f" {przed} " or " an " in f" {przed} ":
             slowa_odp = odp.split()
             if len(slowa_odp) >= 2 and slowa_odp[0].lower() in ("the", "a", "an"):
                 odp = " ".join(slowa_odp[1:])
 
-    # --- Sprawdź liczbę mnogą ---
     if "___" in pytanie:
         przed = pytanie.split("___")[0].lower()
-        # wskaźniki mnogiej liczby przed luką
         mnogie = ["some", "many", "few", "these", "those", "several", "two", "three", "a lot of"]
-        # wskaźniki po luce (np. "___ are")
         po = pytanie.split("___")[1].lower() if len(pytanie.split("___")) > 1 else ""
         sugeruje_mnogą = any(m in przed.split() for m in mnogie) or po.strip().startswith("are")
 
         if sugeruje_mnogą and odp and not odp.endswith("s"):
-            # spróbuj dodać 's' (prosta heurystyka)
             if odp.endswith("y"):
                 odp_mnoga = odp[:-1] + "ies"
             elif odp.endswith(("s", "sh", "ch", "x", "z")):
@@ -180,13 +171,13 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = random.randint(0, 6 * 3600)
+    losowe_opoznienie = random.randint(0, 9000)  # 0-2.5h -> 17:30-20:00 PL zimą
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
 
     trudne = wczytaj_json(TRUDNE_FILE)
-    nauczone = wczytaj_json(NAUCZONE_FILE)  # {zdanie: odpowiedź}
+    nauczone = wczytaj_json(NAUCZONE_FILE)
     print(f"Załadowano {len(trudne)} słów i {len(nauczone)} zdań", flush=True)
 
     options = Options()
@@ -266,7 +257,6 @@ def main():
                 print("     Pusty hint – pomijam.", flush=True)
                 continue
 
-            # --- Kolejność sprawdzeń ---
             juz_ocenione = hint in ocenione
             znam_zdanie = pytanie in nauczone
 
@@ -326,13 +316,11 @@ def main():
 
             poprawna_ze_statusu = wyciagnij_poprawna(status)
 
-            # --- ZAPISZ ZDANIE + ODPOWIEDŹ ---
             if poprawna_ze_statusu and pytanie:
                 nauczone[pytanie] = poprawna_ze_statusu
                 zapisz_json(NAUCZONE_FILE, nauczone)
                 print(f"     Zapisano zdanie: {pytanie[:50]}... -> {poprawna_ze_statusu}", flush=True)
 
-            # --- LICZENIE (tylko pierwsza próba) ---
             if "Dobrze" in status:
                 if not juz_ocenione:
                     ocenione[hint] = "correct"
