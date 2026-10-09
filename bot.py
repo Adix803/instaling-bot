@@ -60,7 +60,6 @@ def zrob_blad(slowo):
 
 
 def get_text_js(driver, by, selector):
-    """Pobiera tekst elementu przez JS (działa nawet jak ukryty)."""
     try:
         el = driver.find_element(by, selector)
         return driver.execute_script("return arguments[0].textContent", el).strip()
@@ -73,7 +72,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.")
         return
 
-    losowe_opoznienie = 0  # TEST
+    losowe_opoznienie = 0  # TEST – potem zmień na random.randint(0, 6 * 3600)
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
@@ -110,15 +109,31 @@ def main():
                 (By.XPATH,
                  "//button[contains(text(), 'Rozpocznij sesję')] | //a[contains(text(), 'Dokończ sesję')] | //button[contains(text(), 'Dokończ sesję')]")))
             btn.click()
-            print("Kliknięto start/kontynuację sesji.")
-            time.sleep(random.uniform(4, 6))
-                    print(f"URL po kliknięciu: {driver.current_url}")
-        with open("page_after_start.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        print("Zapisano page_after_start.html")
+            print("Kliknięto Rozpocznij/Dokończ sesję.")
+            time.sleep(random.uniform(3, 5))
         except Exception as e:
-            print(f"Nie znaleziono przycisku sesji: {e}")
+            print(f"Nie znaleziono przycisku startu: {e}")
             print(f"URL: {driver.current_url}")
+            return
+
+        # --- NOWE: kliknij "Kontynuuj sesję" jeśli się pojawi ---
+        try:
+            btn2 = WebDriverWait(driver, 8).until(EC.element_to_be_clickable(
+                (By.XPATH, "//button[contains(text(), 'Kontynuuj sesję')]")))
+            btn2.click()
+            print("Kliknięto 'Kontynuuj sesję'.")
+            time.sleep(random.uniform(3, 5))
+        except Exception:
+            print("Brak 'Kontynuuj sesję' – idę dalej.")
+
+        # --- NOWE: poczekaj aż pole 'answer' się pojawi ---
+        try:
+            wait.until(EC.presence_of_element_located((By.ID, "answer")))
+            print("Pole 'answer' znalezione. Startuję pętlę.")
+        except Exception:
+            print("Pole 'answer' się nie pojawiło – zapisuję HTML do debugu.")
+            with open("page_debug.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
             return
 
         # --- Pętla słówek ---
@@ -126,14 +141,12 @@ def main():
         maks_proby = 300
 
         for i in range(maks_proby):
-            # Czekaj aż pole answer się pojawi i będzie interaktywne
             try:
-                pole = wait.until(EC.element_to_be_clickable((By.ID, "answer")))
+                pole = wait.until(EC.presence_of_element_located((By.ID, "answer")))
             except Exception:
                 print("Koniec sesji – brak pola odpowiedzi.")
                 break
 
-            # Pobierz tekst przez JS (działa nawet dla ukrytych)
             pytanie = get_text_js(driver, By.ID, "question")
             hint = get_text_js(driver, By.ID, "question_translation")
 
@@ -141,12 +154,10 @@ def main():
             print(f"     Postęp: poprawnych={licznik_poprawnych}, błędów={liczba_bledow}/{docelowa_liczba_bledow}")
 
             if not hint:
-                print("     Pusty hint – pomijam, klikam Sprawdź żeby przejść dalej.")
-                # spróbuj kliknąć Sprawdź mimo wszystko
+                print("     Pusty hint – próbuję przejść dalej.")
                 try:
                     driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
                     time.sleep(random.uniform(2, 4))
-                    # Dalej
                     try:
                         driver.find_element(By.XPATH,
                             "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
@@ -175,7 +186,6 @@ def main():
                 odp = zrob_blad(tlumacz(hint))
                 print(f"     Literówka #1: {odp}")
 
-            # Wpisz odpowiedź – przez JS dla pewności
             try:
                 driver.execute_script("arguments[0].value = '';", pole)
                 pole.send_keys(odp)
@@ -184,7 +194,6 @@ def main():
                 print(f"     Nie mogę wpisać: {e}")
                 break
 
-            # Sprawdź
             try:
                 driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
             except Exception as e:
@@ -198,7 +207,6 @@ def main():
 
             if "Niepoprawnie" in status:
                 liczba_bledow += 1
-                # poprawna odpowiedź z answer_result
                 poprawna = ""
                 try:
                     el = driver.find_element(By.CSS_SELECTOR, "#answer_result strong, #answer_result b, #answer_result .text-success")
@@ -216,7 +224,6 @@ def main():
                     do_powtorzenia[hint] = True
                     print(f"     Literówka/synonim – zapamiętane.")
 
-            # Dalej
             try:
                 driver.find_element(By.XPATH,
                     "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
