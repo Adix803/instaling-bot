@@ -62,7 +62,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.")
         return
 
-    losowe_opoznienie = random.randint(0, 6 * 3600)
+    losowe_opoznienie = 0
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
