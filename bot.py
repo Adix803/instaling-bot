@@ -112,6 +112,10 @@ def main():
             btn.click()
             print("Kliknięto start/kontynuację sesji.")
             time.sleep(random.uniform(4, 6))
+                    print(f"URL po kliknięciu: {driver.current_url}")
+        with open("page_after_start.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        print("Zapisano page_after_start.html")
         except Exception as e:
             print(f"Nie znaleziono przycisku sesji: {e}")
             print(f"URL: {driver.current_url}")
