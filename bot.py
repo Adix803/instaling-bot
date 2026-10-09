@@ -33,6 +33,8 @@ def zapisz_trudne(dane):
 
 
 def tlumacz(tekst):
+    if not tekst:
+        return ""
     try:
         r = requests.get(
             "https://api.mymemory.translated.net/get",
@@ -57,12 +59,21 @@ def zrob_blad(slowo):
     return random.choice(opcje)(slowo)
 
 
+def get_text_js(driver, by, selector):
+    """Pobiera tekst elementu przez JS (działa nawet jak ukryty)."""
+    try:
+        el = driver.find_element(by, selector)
+        return driver.execute_script("return arguments[0].textContent", el).strip()
+    except Exception:
+        return ""
+
+
 def main():
     if date.today() >= date(2027, 6, 1):
         print("Bot wyłączony – minęła data 2027-06-01.")
         return
 
-    losowe_opoznienie = 0
+    losowe_opoznienie = 0  # TEST
     print(f"Bot startuje za {losowe_opoznienie} sekund...")
     time.sleep(losowe_opoznienie)
 
@@ -100,7 +111,7 @@ def main():
                  "//button[contains(text(), 'Rozpocznij sesję')] | //a[contains(text(), 'Dokończ sesję')] | //button[contains(text(), 'Dokończ sesję')]")))
             btn.click()
             print("Kliknięto start/kontynuację sesji.")
-            time.sleep(random.uniform(3, 5))
+            time.sleep(random.uniform(4, 6))
         except Exception as e:
             print(f"Nie znaleziono przycisku sesji: {e}")
             print(f"URL: {driver.current_url}")
@@ -111,26 +122,38 @@ def main():
         maks_proby = 300
 
         for i in range(maks_proby):
+            # Czekaj aż pole answer się pojawi i będzie interaktywne
             try:
-                pole = wait.until(EC.presence_of_element_located((By.ID, "answer")))
+                pole = wait.until(EC.element_to_be_clickable((By.ID, "answer")))
             except Exception:
                 print("Koniec sesji – brak pola odpowiedzi.")
                 break
 
-            try:
-                hint = driver.find_element(By.ID, "question_translation").text.strip()
-            except Exception:
-                hint = ""
-            try:
-                pytanie = driver.find_element(By.ID, "question").text.strip()
-            except Exception:
-                pytanie = ""
+            # Pobierz tekst przez JS (działa nawet dla ukrytych)
+            pytanie = get_text_js(driver, By.ID, "question")
+            hint = get_text_js(driver, By.ID, "question_translation")
 
-            print(f"[{i+1}] PL: {hint} | EN: {pytanie[:60]}")
+            print(f"[{i+1}] PL: '{hint}' | EN: '{pytanie[:80]}'")
             print(f"     Postęp: poprawnych={licznik_poprawnych}, błędów={liczba_bledow}/{docelowa_liczba_bledow}")
 
-            powtarzamy = hint in do_powtorzenia
+            if not hint:
+                print("     Pusty hint – pomijam, klikam Sprawdź żeby przejść dalej.")
+                # spróbuj kliknąć Sprawdź mimo wszystko
+                try:
+                    driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
+                    time.sleep(random.uniform(2, 4))
+                    # Dalej
+                    try:
+                        driver.find_element(By.XPATH,
+                            "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
+                        time.sleep(random.uniform(1, 3))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                continue
 
+            powtarzamy = hint in do_powtorzenia
             time.sleep(random.uniform(3, 12))
 
             if powtarzamy:
@@ -140,10 +163,6 @@ def main():
             elif hint in trudne:
                 odp = trudne[hint]
                 print(f"     Zapisana poprawna: {odp}")
-            elif licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= docelowa_liczba_bledow:
-                odp = tlumacz(hint)
-                print(f"     Tłumaczenie (po błędach): {odp}")
-                licznik_poprawnych += 1
             elif licznik_poprawnych < POPRAWNE_ZA_PIERWSZYM:
                 odp = tlumacz(hint)
                 print(f"     Tłumaczenie: {odp}")
@@ -152,10 +171,16 @@ def main():
                 odp = zrob_blad(tlumacz(hint))
                 print(f"     Literówka #1: {odp}")
 
-            pole.clear()
-            pole.send_keys(odp)
-            time.sleep(random.uniform(1, 2))
+            # Wpisz odpowiedź – przez JS dla pewności
+            try:
+                driver.execute_script("arguments[0].value = '';", pole)
+                pole.send_keys(odp)
+                time.sleep(random.uniform(1, 2))
+            except Exception as e:
+                print(f"     Nie mogę wpisać: {e}")
+                break
 
+            # Sprawdź
             try:
                 driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
             except Exception as e:
@@ -164,20 +189,18 @@ def main():
 
             time.sleep(random.uniform(2, 4))
 
-            try:
-                status = driver.find_element(By.ID, "sr_status").text.strip()
-            except Exception:
-                status = ""
+            status = get_text_js(driver, By.ID, "sr_status")
             print(f"     Status: {status}")
 
             if "Niepoprawnie" in status:
                 liczba_bledow += 1
+                # poprawna odpowiedź z answer_result
+                poprawna = ""
                 try:
-                    poprawna_el = driver.find_element(
-                        By.XPATH, "//div[@id='answer_result']//strong | //div[@id='answer_result']//b")
-                    poprawna = poprawna_el.text.strip()
+                    el = driver.find_element(By.CSS_SELECTOR, "#answer_result strong, #answer_result b, #answer_result .text-success")
+                    poprawna = driver.execute_script("return arguments[0].textContent", el).strip()
                 except Exception:
-                    poprawna = ""
+                    pass
                 if poprawna and hint:
                     trudne[hint] = poprawna
                     zapisz_trudne(trudne)
@@ -187,8 +210,9 @@ def main():
             elif "Literówka" in status or "Synonim" in status:
                 if hint:
                     do_powtorzenia[hint] = True
-                    print(f"     Literówka/synonim – słowo wróci, zapamiętane.")
+                    print(f"     Literówka/synonim – zapamiętane.")
 
+            # Dalej
             try:
                 driver.find_element(By.XPATH,
                     "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
