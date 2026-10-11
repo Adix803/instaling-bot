@@ -207,26 +207,36 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}", flush=True)
 
-        # --- Start / Kontynuacja ---
-        try:
-            btn = WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
-                (By.XPATH,
-                 "//button[contains(text(), 'Rozpocznij sesję')] | //a[contains(text(), 'Dokończ sesję')] | //button[contains(text(), 'Dokończ sesję')]")))
-            btn.click()
-            print("Kliknięto start sesji.", flush=True)
-            time.sleep(random.uniform(3, 5))
-        except Exception as e:
-            print(f"Nie znaleziono przycisku startu: {e}", flush=True)
-            return
+               # --- Klikaj WSZYSTKIE przyciski "Rozpocznij/Dokończ/Kontynuuj sesję" po kolei ---
+        for proba in range(5):
+            kliknieto = False
+            for tekst in ["Rozpocznij sesję", "Dokończ sesję", "Kontynuuj sesję"]:
+                try:
+                    btns = driver.find_elements(By.XPATH, f"//*[contains(text(), '{tekst}')]")
+                    for btn in btns:
+                        try:
+                            driver.execute_script("arguments[0].scrollIntoView();", btn)
+                            time.sleep(0.5)
+                            driver.execute_script("arguments[0].click();", btn)
+                            print(f"Kliknięto: {tekst}", flush=True)
+                            kliknieto = True
+                            time.sleep(random.uniform(3, 5))
+                            break
+                        except Exception:
+                            pass
+                    if kliknieto:
+                        break
+                except Exception:
+                    pass
 
-        try:
-            btn2 = WebDriverWait(driver, 8).until(EC.element_to_be_clickable(
-                (By.XPATH, "//button[contains(text(), 'Kontynuuj sesję')]")))
-            btn2.click()
-            print("Kliknięto 'Kontynuuj sesję'.", flush=True)
-            time.sleep(random.uniform(3, 5))
-        except Exception:
-            pass
+            # sprawdź, czy już jest pole answer
+            if driver.find_elements(By.ID, "answer"):
+                print("Pole 'answer' widoczne – sesja gotowa.", flush=True)
+                break
+
+            if not kliknieto:
+                print(f"Runda {proba+1}: nic do kliknięcia, czekam...", flush=True)
+                time.sleep(3)
 
         try:
             WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "answer")))
