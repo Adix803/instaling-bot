@@ -171,7 +171,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = random.randint(0, 25200)  # 0-7h -> 16:30-23:30 PL  # 0-2.5h -> 17:30-20:00 PL zimą
+    losowe_opoznienie = random.randint(0, 18000)  # 0-5h (limit GitHuba = 6h)
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
@@ -207,37 +207,41 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}", flush=True)
 
-               # --- Klikaj WSZYSTKIE przyciski "Rozpocznij/Dokończ/Kontynuuj sesję" po kolei ---
-        for proba in range(5):
+        # --- Start / Kontynuacja – szukaj po klasie CSS ---
+        for proba in range(8):
             kliknieto = False
-            for tekst in ["Rozpocznij sesję", "Dokończ sesję", "Kontynuuj sesję"]:
-                try:
-                    btns = driver.find_elements(By.XPATH, f"//*[contains(text(), '{tekst}')]")
-                    for btn in btns:
-                        try:
-                            driver.execute_script("arguments[0].scrollIntoView();", btn)
-                            time.sleep(0.5)
-                            driver.execute_script("arguments[0].click();", btn)
-                            print(f"Kliknięto: {tekst}", flush=True)
-                            kliknieto = True
-                            time.sleep(random.uniform(3, 5))
-                            break
-                        except Exception:
-                            pass
-                    if kliknieto:
-                        break
-                except Exception:
-                    pass
 
-            # sprawdź, czy już jest pole answer
+            try:
+                btns = driver.find_elements(By.CSS_SELECTOR, ".btn-start-session")
+                if btns:
+                    print(f"Runda {proba+1}: znaleziono {len(btns)} przycisków .btn-start-session", flush=True)
+                for btn in btns:
+                    try:
+                        tekst = (btn.text or btn.get_attribute("textContent") or "").strip()
+                        print(f"   -> klikam: '{tekst}'", flush=True)
+                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                        time.sleep(1)
+                        driver.execute_script("arguments[0].click();", btn)
+                        kliknieto = True
+                        time.sleep(random.uniform(3, 5))
+                    except Exception as e:
+                        print(f"   -> błąd klikania: {e}", flush=True)
+            except Exception as e:
+                print(f"Runda {proba+1}: błąd szukania: {e}", flush=True)
+
             if driver.find_elements(By.ID, "answer"):
                 print("Pole 'answer' widoczne – sesja gotowa.", flush=True)
                 break
 
             if not kliknieto:
-                print(f"Runda {proba+1}: nic do kliknięcia, czekam...", flush=True)
-                time.sleep(3)
+                print(f"Runda {proba+1}: nic nie kliknięto, czekam 5s...", flush=True)
+                time.sleep(5)
 
+            if "app.php" in driver.current_url and driver.find_elements(By.ID, "answer"):
+                print("Jesteśmy na app.php i pole answer widoczne.", flush=True)
+                break
+
+        # --- Czekaj na pole answer ---
         try:
             WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "answer")))
             print("Pole 'answer' znalezione.", flush=True)
