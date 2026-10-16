@@ -64,7 +64,6 @@ def tlumacz(tekst):
 def dopasuj_do_zdania(odp, pytanie):
     if not odp or not pytanie:
         return odp
-
     if "___" in pytanie:
         przed = pytanie.split("___")[0].strip().lower()
         slowa_przed = przed.split()
@@ -78,13 +77,11 @@ def dopasuj_do_zdania(odp, pytanie):
             slowa_odp = odp.split()
             if len(slowa_odp) >= 2 and slowa_odp[0].lower() in ("the", "a", "an"):
                 odp = " ".join(slowa_odp[1:])
-
     if "___" in pytanie:
         przed = pytanie.split("___")[0].lower()
         mnogie = ["some", "many", "few", "these", "those", "several", "two", "three", "a lot of"]
         po = pytanie.split("___")[1].lower() if len(pytanie.split("___")) > 1 else ""
         sugeruje_mnogą = any(m in przed.split() for m in mnogie) or po.strip().startswith("are")
-
         if sugeruje_mnogą and odp and not odp.endswith("s"):
             if odp.endswith("y"):
                 odp_mnoga = odp[:-1] + "ies"
@@ -94,7 +91,6 @@ def dopasuj_do_zdania(odp, pytanie):
                 odp_mnoga = odp + "s"
             print(f"     (zdanie sugeruje mnogą: '{odp}' -> '{odp_mnoga}')", flush=True)
             odp = odp_mnoga
-
     return odp
 
 
@@ -116,6 +112,18 @@ def get_text_js(driver, by, selector):
         return driver.execute_script("return arguments[0].textContent", el).strip()
     except Exception:
         return ""
+
+
+def answer_widoczne(driver):
+    """Sprawdza, czy pole answer jest WIDOCZNE, nie tylko istnieje w DOM."""
+    try:
+        els = driver.find_elements(By.ID, "answer")
+        for el in els:
+            if el.is_displayed():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def wyciagnij_poprawna(status_text):
@@ -207,54 +215,52 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}", flush=True)
 
-        # --- Start / Kontynuacja – szukaj po klasie CSS ---
-        for proba in range(8):
-            kliknieto = False
+        # --- Start / Kontynuacja – klikaj dopóki pole answer nie jest WIDOCZNE ---
+        for proba in range(15):
+            if answer_widoczne(driver):
+                print(f"Runda {proba+1}: pole answer WIDOCZNE – sesja gotowa.", flush=True)
+                break
 
+            kliknieto = False
             try:
                 btns = driver.find_elements(By.CSS_SELECTOR, ".btn-start-session")
-                if btns:
-                    print(f"Runda {proba+1}: znaleziono {len(btns)} przycisków .btn-start-session", flush=True)
-                for btn in btns:
+                widoczne = [b for b in btns if b.is_displayed()]
+                if widoczne:
+                    print(f"Runda {proba+1}: {len(widoczne)} widocznych przycisków .btn-start-session", flush=True)
+                for btn in widoczne:
                     try:
                         tekst = (btn.text or btn.get_attribute("textContent") or "").strip()
-                        print(f"   -> klikam: '{tekst}'", flush=True)
+                        print(f"   -> klikam: '{tekst}' | URL: {driver.current_url[:60]}", flush=True)
                         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
                         time.sleep(1)
                         driver.execute_script("arguments[0].click();", btn)
                         kliknieto = True
                         time.sleep(random.uniform(3, 5))
+                        break  # jeden przycisk na raz
                     except Exception as e:
                         print(f"   -> błąd klikania: {e}", flush=True)
             except Exception as e:
                 print(f"Runda {proba+1}: błąd szukania: {e}", flush=True)
 
-            if driver.find_elements(By.ID, "answer"):
-                print("Pole 'answer' widoczne – sesja gotowa.", flush=True)
-                break
-
             if not kliknieto:
-                print(f"Runda {proba+1}: nic nie kliknięto, czekam 5s...", flush=True)
+                print(f"Runda {proba+1}: brak widocznych przycisków, czekam 5s...", flush=True)
                 time.sleep(5)
 
-            if "app.php" in driver.current_url and driver.find_elements(By.ID, "answer"):
-                print("Jesteśmy na app.php i pole answer widoczne.", flush=True)
-                break
-
-        # --- Czekaj na pole answer ---
-        try:
-            WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "answer")))
-            print("Pole 'answer' znalezione.", flush=True)
-        except Exception:
-            print("Pole 'answer' się nie pojawiło.", flush=True)
+        # --- Czekaj na WIDOCZNE pole answer ---
+        if not answer_widoczne(driver):
+            print("Pole 'answer' NIE jest widoczne po 15 rundach. Przerywam.", flush=True)
+            print(f"Ostatni URL: {driver.current_url}", flush=True)
             return
+        print("Pole 'answer' widoczne. Startuję pętlę.", flush=True)
 
         # --- Pętla ---
         maks_proby = 300
         poprzednie_pytanie = ""
+        pustych_pod_rzad = 0
 
         for i in range(maks_proby):
-            for _ in range(15):
+            # czekaj na nowe pytanie (max 20 s)
+            for _ in range(20):
                 obecne = get_text_js(driver, By.ID, "question")
                 if obecne and obecne != poprzednie_pytanie:
                     break
@@ -263,6 +269,18 @@ def main():
             pytanie = get_text_js(driver, By.ID, "question")
             hint = get_text_js(driver, By.ID, "question_translation")
             poprzednie_pytanie = pytanie
+
+            # jeśli puste pytanie 5 razy z rzędu – przerwij
+            if not pytanie and not hint:
+                pustych_pod_rzad += 1
+                print(f"[{i+1}] Puste pytanie ({pustych_pod_rzad}/5)", flush=True)
+                if pustych_pod_rzad >= 5:
+                    print("Za dużo pustych – przerywam sesję.", flush=True)
+                    break
+                time.sleep(3)
+                continue
+            else:
+                pustych_pod_rzad = 0
 
             print(f"\n[{i+1}] PL: '{hint}' | EN: '{pytanie[:80]}'", flush=True)
             print(f"     Postęp: poprawnych={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, błędów={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
