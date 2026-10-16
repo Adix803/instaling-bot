@@ -179,7 +179,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = random.randint(0, 18000)  # 0-5h (limit GitHuba = 6h)
+    losowe_opoznienie = 0  # TEST
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
