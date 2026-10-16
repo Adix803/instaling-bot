@@ -62,6 +62,7 @@ def tlumacz(tekst):
 
 
 def dopasuj_do_zdania(odp, pytanie):
+    """Tylko usuwa przedimki i dopasowuje mnogą, gdy NIE mamy zapisanej odpowiedzi."""
     if not odp or not pytanie:
         return odp
     if "___" in pytanie:
@@ -77,20 +78,6 @@ def dopasuj_do_zdania(odp, pytanie):
             slowa_odp = odp.split()
             if len(slowa_odp) >= 2 and slowa_odp[0].lower() in ("the", "a", "an"):
                 odp = " ".join(slowa_odp[1:])
-    if "___" in pytanie:
-        przed = pytanie.split("___")[0].lower()
-        mnogie = ["some", "many", "few", "these", "those", "several", "two", "three", "a lot of"]
-        po = pytanie.split("___")[1].lower() if len(pytanie.split("___")) > 1 else ""
-        sugeruje_mnogą = any(m in przed.split() for m in mnogie) or po.strip().startswith("are")
-        if sugeruje_mnogą and odp and not odp.endswith("s"):
-            if odp.endswith("y"):
-                odp_mnoga = odp[:-1] + "ies"
-            elif odp.endswith(("s", "sh", "ch", "x", "z")):
-                odp_mnoga = odp + "es"
-            else:
-                odp_mnoga = odp + "s"
-            print(f"     (zdanie sugeruje mnogą: '{odp}' -> '{odp_mnoga}')", flush=True)
-            odp = odp_mnoga
     return odp
 
 
@@ -178,7 +165,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = 0  # TEST – potem zmień na random.randint(0, 18000)
+    losowe_opoznienie = 0  # TEST – potem random.randint(0, 18000)
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
@@ -197,6 +184,7 @@ def main():
 
     do_powtorzenia = {}
     ocenione = {}
+    proby_na_slowo = {}  # hint -> ile razy bot próbował
     liczba_bledow = 0
     licznik_poprawnych = 0
 
@@ -214,49 +202,50 @@ def main():
         time.sleep(random.uniform(3, 5))
         print(f"Po logowaniu: {driver.current_url}", flush=True)
 
-        # --- Start / Kontynuacja – klikaj dopóki pole answer nie jest WIDOCZNE ---
+        # --- Start / Kontynuacja ---
         for proba in range(15):
             if answer_widoczne(driver):
-                print(f"Runda {proba+1}: pole answer WIDOCZNE – sesja gotowa.", flush=True)
+                print(f"Runda {proba+1}: pole answer WIDOCZNE.", flush=True)
                 break
 
             kliknieto = False
             try:
                 btns = driver.find_elements(By.CSS_SELECTOR, ".btn-start-session")
                 widoczne = [b for b in btns if b.is_displayed()]
-                if widoczne:
-                    print(f"Runda {proba+1}: {len(widoczne)} widocznych przycisków .btn-start-session", flush=True)
                 for btn in widoczne:
                     try:
                         tekst = (btn.text or btn.get_attribute("textContent") or "").strip()
-                        print(f"   -> klikam: '{tekst}' | URL: {driver.current_url[:60]}", flush=True)
+                        print(f"   -> klikam: '{tekst}'", flush=True)
                         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
                         time.sleep(1)
                         driver.execute_script("arguments[0].click();", btn)
                         kliknieto = True
                         time.sleep(random.uniform(3, 5))
                         break
-                    except Exception as e:
-                        print(f"   -> błąd klikania: {e}", flush=True)
-            except Exception as e:
-                print(f"Runda {proba+1}: błąd szukania: {e}", flush=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             if not kliknieto:
-                print(f"Runda {proba+1}: brak widocznych przycisków, czekam 5s...", flush=True)
                 time.sleep(5)
 
         if not answer_widoczne(driver):
-            print("Pole 'answer' NIE jest widoczne po 15 rundach. Przerywam.", flush=True)
-            print(f"Ostatni URL: {driver.current_url}", flush=True)
+            print("Pole answer nie pojawiło się. Przerywam.", flush=True)
             return
-        print("Pole 'answer' widoczne. Startuję pętlę.", flush=True)
+        print("Pole answer widoczne. Startuję pętlę.", flush=True)
 
         # --- Pętla ---
-        maks_proby = 300
+        maks_proby = 80  # TWARDY LIMIT iteracji
         poprzednie_pytanie = ""
         pustych_pod_rzad = 0
 
         for i in range(maks_proby):
+            # TWARDY STOP - wszystkie plany wykonane
+            if licznik_poprawnych >= POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
+                print("Osiągnięto oba plany. Kończę sesję.", flush=True)
+                break
+
             for _ in range(20):
                 obecne = get_text_js(driver, By.ID, "question")
                 if obecne and obecne != poprzednie_pytanie:
@@ -271,57 +260,68 @@ def main():
                 pustych_pod_rzad += 1
                 print(f"[{i+1}] Puste pytanie ({pustych_pod_rzad}/5)", flush=True)
                 if pustych_pod_rzad >= 5:
-                    print("Za dużo pustych – przerywam sesję.", flush=True)
+                    print("Za dużo pustych – koniec.", flush=True)
                     break
                 time.sleep(3)
                 continue
             else:
                 pustych_pod_rzad = 0
 
-            print(f"\n[{i+1}] PL: '{hint}' | EN: '{pytanie[:80]}'", flush=True)
-            print(f"     Postęp: poprawnych={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, błędów={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
+            print(f"\n[{i+1}] PL: '{hint}' | EN: '{pytanie[:60]}'", flush=True)
+            print(f"     Postęp: popr={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, bł={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
 
             if not hint:
                 print("     Pusty hint – pomijam.", flush=True)
                 continue
 
+            # liczba prób na to słowo
+            proby_na_slowo[hint] = proby_na_slowo.get(hint, 0) + 1
+            zbyt_wiele_prob = proby_na_slowo[hint] > 4
+
+            if zbyt_wiele_prob:
+                print(f"     UWAGA: '{hint}' próbowane {proby_na_slowo[hint]} razy – wymuszam zapisaną odpowiedź!", flush=True)
+
             juz_ocenione = hint in ocenione
             znam_zdanie = pytanie in nauczone
+            mam_trudne = hint in trudne
 
-            if juz_ocenione:
-                akcja = "poprawna_bez_liczenia"
+            # --- WYBÓR ODPOWIEDZI ---
+            # PRIORYTET 1: jeśli mamy zapisaną odpowiedź – używamy JEJ BEZ ZMIAN
+            if zbyt_wiele_prob:
+                if mam_trudne:
+                    odp = trudne[hint]
+                elif znam_zdanie:
+                    odp = nauczone[pytanie]
+                else:
+                    odp = tlumacz(hint)
+                print(f"     Wymuszona odpowiedź: {odp}", flush=True)
             elif znam_zdanie:
-                akcja = "poprawna_z_zdania"
-            elif hint in do_powtorzenia:
-                akcja = "blad_2"
-            elif hint in trudne:
-                akcja = "poprawna_zapisana"
-            else:
-                akcja = wybierz_akcje(licznik_poprawnych, liczba_bledow)
-
-            time.sleep(random.uniform(3, 12))
-
-            if akcja == "poprawna_bez_liczenia":
-                odp = nauczone.get(pytanie) or trudne.get(hint) or tlumacz(hint)
+                odp = nauczone[pytanie]
+                print(f"     Znam zdanie: {odp}", flush=True)
+            elif mam_trudne and juz_ocenione:
+                odp = trudne[hint]
+                print(f"     Zapisana (ocenione): {odp}", flush=True)
+            elif juz_ocenione:
+                odp = tlumacz(hint)
                 odp = dopasuj_do_zdania(odp, pytanie)
                 print(f"     Już ocenione – poprawiam: {odp}", flush=True)
-            elif akcja == "poprawna_z_zdania":
-                odp = nauczone[pytanie]
-                print(f"     Znam to zdanie! Użyję zapisanej: {odp}", flush=True)
-            elif akcja == "blad_2":
+            elif hint in do_powtorzenia:
                 odp = zrob_blad(tlumacz(hint))
                 print(f"     Literówka #2: {odp}", flush=True)
                 del do_powtorzenia[hint]
-            elif akcja == "poprawna_zapisana":
-                odp = dopasuj_do_zdania(trudne[hint], pytanie)
-                print(f"     Zapisana poprawna: {odp}", flush=True)
-            elif akcja == "poprawna":
-                odp = tlumacz(hint)
-                odp = dopasuj_do_zdania(odp, pytanie)
-                print(f"     Tłumaczenie (poprawna): {odp}", flush=True)
+            elif mam_trudne:
+                odp = trudne[hint]
+                print(f"     Zapisana: {odp}", flush=True)
             else:
-                odp = zrob_blad(tlumacz(hint))
-                print(f"     Literówka #1: {odp}", flush=True)
+                akcja = wybierz_akcje(licznik_poprawnych, liczba_bledow)
+                time.sleep(random.uniform(3, 12))
+                if akcja == "poprawna":
+                    odp = tlumacz(hint)
+                    odp = dopasuj_do_zdania(odp, pytanie)
+                    print(f"     Tłumaczenie (poprawna): {odp}", flush=True)
+                else:
+                    odp = zrob_blad(tlumacz(hint))
+                    print(f"     Literówka #1: {odp}", flush=True)
 
             if not wpisz_odpowiedz(driver, odp):
                 break
@@ -340,26 +340,32 @@ def main():
             time.sleep(random.uniform(2, 4))
 
             status = get_text_js(driver, By.ID, "sr_status")
-            print(f"     [DEBUG status]: '{status}'", flush=True)
+            print(f"     Status: '{status}'", flush=True)
 
             poprawna_ze_statusu = wyciagnij_poprawna(status)
 
-            if poprawna_ze_statusu and pytanie:
-                nauczone[pytanie] = poprawna_ze_statusu
+            # Zapisz poprawną jeśli Instaling ją pokazał
+            if poprawna_ze_statusu:
+                if hint:
+                    trudne[hint] = poprawna_ze_statusu
+                if pytanie:
+                    nauczone[pytanie] = poprawna_ze_statusu
+                zapisz_json(TRUDNE_FILE, trudne)
                 zapisz_json(NAUCZONE_FILE, nauczone)
-                print(f"     Zapisano zdanie: {pytanie[:50]}... -> {poprawna_ze_statusu}", flush=True)
 
             status_lower = status.lower()
 
-            if "dobrze" in status_lower or "dobrze!" in status_lower:
+            if "dobrze" in status_lower:
                 if not juz_ocenione:
                     ocenione[hint] = "correct"
                     licznik_poprawnych += 1
-                    print(f"     >>> DOBRZE. Poprawnych: {licznik_poprawnych}", flush=True)
+                    print(f"     >>> DOBRZE. Popr: {licznik_poprawnych}", flush=True)
                 else:
                     print(f"     >>> Dobrze (powtórka)", flush=True)
+                # reset liczby prób – udało się
+                proby_na_slowo[hint] = 0
 
-            elif "niepoprawnie" in status_lower or "źle" in status_lower or "zle" in status_lower:
+            elif "niepoprawnie" in status_lower or "źle" in status_lower:
                 if not juz_ocenione:
                     ocenione[hint] = "wrong"
                     liczba_bledow += 1
@@ -367,20 +373,11 @@ def main():
                 else:
                     print(f"     >>> Niepoprawnie (powtórka)", flush=True)
 
-                if poprawna_ze_statusu and hint and poprawna_ze_statusu.lower() != odp.lower():
-                    trudne[hint] = poprawna_ze_statusu
-                    zapisz_json(TRUDNE_FILE, trudne)
-
-            elif ("literówka" in status_lower or "synonim" in status_lower 
-                  or "wielko" in status_lower or "liter" in status_lower
-                  or "pisownia" in status_lower):
+            elif ("literówka" in status_lower or "synonim" in status_lower
+                  or "wielko" in status_lower or "pisownia" in status_lower):
                 if hint and not juz_ocenione:
                     do_powtorzenia[hint] = True
-                    if poprawna_ze_statusu and poprawna_ze_statusu.lower() != odp.lower():
-                        trudne[hint] = poprawna_ze_statusu
-                        zapisz_json(TRUDNE_FILE, trudne)
-                        print(f"     Zapisano z błędu: {hint} -> {poprawna_ze_statusu}", flush=True)
-                    print(f"     Literówka/synonim/wielkość liter – wróci, zrobię źle jeszcze raz.", flush=True)
+                    print(f"     Miękki błąd – wróci.", flush=True)
 
             time.sleep(random.uniform(1, 2))
             try:
@@ -396,7 +393,7 @@ def main():
 
             time.sleep(random.uniform(2, 4))
 
-        print(f"\nKoniec sesji. Poprawnych: {licznik_poprawnych}, błędów: {liczba_bledow}", flush=True)
+        print(f"\nKONIEC. Poprawnych: {licznik_poprawnych}, błędów: {liczba_bledow}", flush=True)
 
     except Exception as e:
         print(f"Błąd: {e}", flush=True)
