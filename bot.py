@@ -115,7 +115,6 @@ def get_text_js(driver, by, selector):
 
 
 def answer_widoczne(driver):
-    """Sprawdza, czy pole answer jest WIDOCZNE, nie tylko istnieje w DOM."""
     try:
         els = driver.find_elements(By.ID, "answer")
         for el in els:
@@ -179,7 +178,7 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = 0  # TEST
+    losowe_opoznienie = 0  # TEST – potem zmień na random.randint(0, 18000)
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
@@ -236,7 +235,7 @@ def main():
                         driver.execute_script("arguments[0].click();", btn)
                         kliknieto = True
                         time.sleep(random.uniform(3, 5))
-                        break  # jeden przycisk na raz
+                        break
                     except Exception as e:
                         print(f"   -> błąd klikania: {e}", flush=True)
             except Exception as e:
@@ -246,7 +245,6 @@ def main():
                 print(f"Runda {proba+1}: brak widocznych przycisków, czekam 5s...", flush=True)
                 time.sleep(5)
 
-        # --- Czekaj na WIDOCZNE pole answer ---
         if not answer_widoczne(driver):
             print("Pole 'answer' NIE jest widoczne po 15 rundach. Przerywam.", flush=True)
             print(f"Ostatni URL: {driver.current_url}", flush=True)
@@ -259,7 +257,6 @@ def main():
         pustych_pod_rzad = 0
 
         for i in range(maks_proby):
-            # czekaj na nowe pytanie (max 20 s)
             for _ in range(20):
                 obecne = get_text_js(driver, By.ID, "question")
                 if obecne and obecne != poprzednie_pytanie:
@@ -270,7 +267,6 @@ def main():
             hint = get_text_js(driver, By.ID, "question_translation")
             poprzednie_pytanie = pytanie
 
-            # jeśli puste pytanie 5 razy z rzędu – przerwij
             if not pytanie and not hint:
                 pustych_pod_rzad += 1
                 print(f"[{i+1}] Puste pytanie ({pustych_pod_rzad}/5)", flush=True)
@@ -344,7 +340,7 @@ def main():
             time.sleep(random.uniform(2, 4))
 
             status = get_text_js(driver, By.ID, "sr_status")
-            print(f"     Status: {status}", flush=True)
+            print(f"     [DEBUG status]: '{status}'", flush=True)
 
             poprawna_ze_statusu = wyciagnij_poprawna(status)
 
@@ -353,7 +349,9 @@ def main():
                 zapisz_json(NAUCZONE_FILE, nauczone)
                 print(f"     Zapisano zdanie: {pytanie[:50]}... -> {poprawna_ze_statusu}", flush=True)
 
-            if "Dobrze" in status:
+            status_lower = status.lower()
+
+            if "dobrze" in status_lower or "dobrze!" in status_lower:
                 if not juz_ocenione:
                     ocenione[hint] = "correct"
                     licznik_poprawnych += 1
@@ -361,7 +359,7 @@ def main():
                 else:
                     print(f"     >>> Dobrze (powtórka)", flush=True)
 
-            elif "Niepoprawnie" in status:
+            elif "niepoprawnie" in status_lower or "źle" in status_lower or "zle" in status_lower:
                 if not juz_ocenione:
                     ocenione[hint] = "wrong"
                     liczba_bledow += 1
@@ -373,10 +371,16 @@ def main():
                     trudne[hint] = poprawna_ze_statusu
                     zapisz_json(TRUDNE_FILE, trudne)
 
-            elif "Literówka" in status or "Synonim" in status:
+            elif ("literówka" in status_lower or "synonim" in status_lower 
+                  or "wielko" in status_lower or "liter" in status_lower
+                  or "pisownia" in status_lower):
                 if hint and not juz_ocenione:
                     do_powtorzenia[hint] = True
-                    print(f"     Literówka/synonim – wróci, zrobię źle jeszcze raz.", flush=True)
+                    if poprawna_ze_statusu and poprawna_ze_statusu.lower() != odp.lower():
+                        trudne[hint] = poprawna_ze_statusu
+                        zapisz_json(TRUDNE_FILE, trudne)
+                        print(f"     Zapisano z błędu: {hint} -> {poprawna_ze_statusu}", flush=True)
+                    print(f"     Literówka/synonim/wielkość liter – wróci, zrobię źle jeszcze raz.", flush=True)
 
             time.sleep(random.uniform(1, 2))
             try:
