@@ -3,6 +3,7 @@ import json
 import re
 import random
 import time
+import unicodedata
 from datetime import date
 import requests
 from selenium import webdriver
@@ -36,13 +37,16 @@ def zapisz_json(plik, dane):
 
 
 def clean_text(text):
-    """Usuwa śmieci HTML, średniki, kropki, itp."""
+    """Usuwa śmieci HTML, nawiasy, średniki i polskie znaki."""
     if not text:
         return ""
-    text = re.sub(r'<.*?>', '', text)  # usuwa tagi HTML
-    text = text.split(';')[0].split(',')[0]  # bierze tylko pierwszy wariant
-    text = text.strip().rstrip('.')
-    return text
+    text = re.sub(r'<.*?>', '', text)          # usuwa tagi HTML
+    text = re.sub(r'\(.*?\)', '', text)        # usuwa (british english)
+    text = re.sub(r'\[.*?\]', '', text)        # usuwa [sth]
+    text = text.split(';')[0].split(',')[0]    # bierze tylko pierwszy wariant
+    # usuwa polskie znaki i akcenty (é -> e, itp.)
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+    return text.strip().rstrip('.')
 
 
 def tlumacz(tekst):
@@ -175,6 +179,19 @@ def wybierz_akcje(licznik_poprawnych, liczba_bledow):
     return "blad"
 
 
+def kliknij_dalej(driver):
+    try:
+        driver.find_element(By.XPATH,
+            "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
+    except Exception:
+        try:
+            btn = driver.find_element(By.XPATH,
+                "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')]")
+            driver.execute_script("arguments[0].click();", btn)
+        except Exception:
+            pass
+
+
 def main():
     if date.today() >= date(2027, 6, 1):
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
@@ -241,6 +258,7 @@ def main():
         poprzednie_pytanie = ""
 
         for i in range(maks_proby):
+            # Jeśli oba plany wykonane, kończymy
             if licznik_poprawnych >= POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
                 print("Osiągnięto oba plany. Kończę.", flush=True)
                 break
@@ -262,17 +280,20 @@ def main():
             print(f"     Postęp: popr={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, bł={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
 
             proby_na_slowo[hint] = proby_na_slowo.get(hint, 0) + 1
-            zbyt_wiele_prob = proby_na_slowo[hint] > 4
+            
+            # TWARDA BLOKADA PĘTLI
+            if proby_na_slowo[hint] > 4:
+                print(f"     UWAGA: '{hint}' utknęło. Klikam Dalej bez wpisywania.", flush=True)
+                kliknij_dalej(driver)
+                time.sleep(2)
+                continue
 
             juz_ocenione = hint in ocenione
             znam_zdanie = pytanie in nauczone
             mam_trudne = hint in trudne
 
             # --- Wybór odpowiedzi ---
-            if zbyt_wiele_prob:
-                odp = trudne.get(hint) or nauczone.get(pytanie) or popraw_format(tlumacz(hint), hint)
-                print(f"     Wymuszona: {odp}", flush=True)
-            elif znam_zdanie:
+            if znam_zdanie:
                 odp = nauczone[pytanie]
                 print(f"     Znam zdanie: {odp}", flush=True)
             elif juz_ocenione and mam_trudne:
@@ -284,7 +305,6 @@ def main():
             elif hint in do_powtorzenia:
                 baza = popraw_format(tlumacz(hint), hint)
                 
-                # Jeśli mamy już dość błędów – NIE rób literówki, tylko wpisz poprawnie!
                 if liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
                     odp = trudne.get(hint) or baza
                     print(f"     Dość błędów! Wpisuję poprawnie: {odp}", flush=True)
@@ -340,19 +360,12 @@ def main():
 
             status_lower = status.lower()
 
-            if "dobrze" in status_lower:
+            if "dobrze" in status_lower or "synonim" in status_lower:
+                # Zarówno Dobrze jak i Synonim są OK
                 if not juz_ocenione:
                     ocenione[hint] = "correct"
                     licznik_poprawnych += 1
-                    print(f"     >>> DOBRZE. Popr: {licznik_poprawnych}", flush=True)
-                proby_na_slowo[hint] = 0
-
-            elif "synonim" in status_lower:
-                # SYNONIM JEST OK! Instaling to akceptuje.
-                if not juz_ocenione:
-                    ocenione[hint] = "correct"
-                    licznik_poprawnych += 1
-                    print(f"     >>> SYNONIM (zaliczone jako poprawne). Popr: {licznik_poprawnych}", flush=True)
+                    print(f"     >>> ZALICZONE (Dobrze/Synonim). Popr: {licznik_poprawnych}", flush=True)
                 proby_na_slowo[hint] = 0
 
             elif "niepoprawnie" in status_lower or "źle" in status_lower:
@@ -372,16 +385,7 @@ def main():
                     print(f"     Literówka – wróci.", flush=True)
 
             time.sleep(random.uniform(1, 2))
-            try:
-                driver.find_element(By.XPATH,
-                    "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
-            except Exception:
-                try:
-                    btn = driver.find_element(By.XPATH,
-                        "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')]")
-                    driver.execute_script("arguments[0].click();", btn)
-                except Exception:
-                    pass
+            kliknij_dalej(driver)
             time.sleep(random.uniform(1, 3))
 
         print(f"\nKONIEC. Poprawnych: {licznik_poprawnych}, błędów: {liczba_bledow}", flush=True)
