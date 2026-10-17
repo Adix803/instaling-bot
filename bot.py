@@ -16,7 +16,6 @@ PASSWORD = os.environ.get("INSTALING_PASSWORD")
 TRUDNE_FILE = "trudne.json"
 NAUCZONE_FILE = "nauczone.json"
 
-# Zmienione na 14-18, żeby zawsze był mały bufor na niechcące błędy
 POPRAWNE_ZA_PIERWSZYM = random.randint(14, 18)
 DOCELOWA_LICZBA_BLEDOW = 20 - POPRAWNE_ZA_PIERWSZYM
 
@@ -36,9 +35,20 @@ def zapisz_json(plik, dane):
         json.dump(dane, f, ensure_ascii=False, indent=2)
 
 
+def clean_text(text):
+    """Usuwa śmieci HTML, średniki, kropki, itp."""
+    if not text:
+        return ""
+    text = re.sub(r'<.*?>', '', text)  # usuwa tagi HTML
+    text = text.split(';')[0].split(',')[0]  # bierze tylko pierwszy wariant
+    text = text.strip().rstrip('.')
+    return text
+
+
 def tlumacz(tekst):
     if not tekst:
         return ""
+    wynik = ""
     try:
         r = requests.get(
             "https://api.mymemory.translated.net/get",
@@ -46,32 +56,30 @@ def tlumacz(tekst):
             timeout=10,
         )
         wynik = r.json()["responseData"]["translatedText"].strip()
-        if wynik and "NO QUERY" not in wynik.upper():
-            return wynik
     except Exception:
         pass
-    try:
-        r = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client": "gtx", "sl": "pl", "tl": "en", "dt": "t", "q": tekst},
-            timeout=10,
-        )
-        return r.json()[0][0][0].strip()
-    except Exception as e:
-        print(f"Błąd tłumaczenia: {e}", flush=True)
-        return tekst
+        
+    if not wynik or "NO QUERY" in wynik.upper():
+        try:
+            r = requests.get(
+                "https://translate.googleapis.com/translate_a/single",
+                params={"client": "gtx", "sl": "pl", "tl": "en", "dt": "t", "q": tekst},
+                timeout=10,
+            )
+            wynik = r.json()[0][0][0].strip()
+        except Exception as e:
+            print(f"Błąd tłumaczenia: {e}", flush=True)
+            return tekst
+            
+    return clean_text(wynik)
 
 
 def popraw_format(tekst, hint):
-    """Poprawia wielkość liter i usuwa kropki, żeby pasowało do Instaling."""
     if not tekst:
         return tekst
-    tekst = tekst.strip().rstrip('.')
-    
-    # Jeśli polskie słowo zaczyna się z małej litery, angielskie też powinno
+    tekst = clean_text(tekst)
     if hint and hint[0].islower():
         return tekst.lower()
-    # Jeśli polskie z dużej, angielskie też (np. Walentynki -> Valentine's Day)
     return tekst[0].upper() + tekst[1:]
 
 
@@ -105,7 +113,7 @@ def zrob_blad(slowo):
 def get_text_js(driver, by, selector):
     try:
         el = driver.find_element(by, selector)
-        return driver.execute_script("return arguments[0].textContent", el).strip()
+        return clean_text(driver.execute_script("return arguments[0].textContent", el).strip())
     except Exception:
         return ""
 
@@ -126,7 +134,7 @@ def wyciagnij_poprawna(status_text):
         return ""
     m = re.search(r"Poprawna odpowied[źz]?:?\s*(.+)", status_text, re.IGNORECASE)
     if m:
-        return m.group(1).split("\n")[0].strip()
+        return clean_text(m.group(1).split("\n")[0].strip())
     return ""
 
 
@@ -188,7 +196,7 @@ def main():
 
     driver = webdriver.Chrome(options=options)
 
-    do_powtorzenia = {}  # hint -> "case" / "typo"
+    do_powtorzenia = {}
     ocenione = {}
     proby_na_slowo = {}
     liczba_bledow = 0
@@ -275,14 +283,18 @@ def main():
                 print(f"     Już ocenione – poprawiam: {odp}", flush=True)
             elif hint in do_powtorzenia:
                 baza = popraw_format(tlumacz(hint), hint)
-                if do_powtorzenia[hint] == "case":
-                    # Zmień wielkość liter
-                    odp = baza.lower() if baza[0].isupper() else baza.capitalize()
-                    print(f"     Powtórka (wielkość liter): {odp}", flush=True)
+                
+                # Jeśli mamy już dość błędów – NIE rób literówki, tylko wpisz poprawnie!
+                if liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
+                    odp = trudne.get(hint) or baza
+                    print(f"     Dość błędów! Wpisuję poprawnie: {odp}", flush=True)
                 else:
-                    # Literówka / synonim
-                    odp = zrob_blad(baza.lower())
-                    print(f"     Literówka #2: {odp}", flush=True)
+                    if do_powtorzenia[hint] == "case":
+                        odp = baza.lower() if baza[0].isupper() else baza.capitalize()
+                        print(f"     Powtórka (wielkość liter): {odp}", flush=True)
+                    else:
+                        odp = zrob_blad(baza.lower())
+                        print(f"     Literówka #2: {odp}", flush=True)
                 del do_powtorzenia[hint]
             elif mam_trudne:
                 odp = trudne[hint]
@@ -335,6 +347,14 @@ def main():
                     print(f"     >>> DOBRZE. Popr: {licznik_poprawnych}", flush=True)
                 proby_na_slowo[hint] = 0
 
+            elif "synonim" in status_lower:
+                # SYNONIM JEST OK! Instaling to akceptuje.
+                if not juz_ocenione:
+                    ocenione[hint] = "correct"
+                    licznik_poprawnych += 1
+                    print(f"     >>> SYNONIM (zaliczone jako poprawne). Popr: {licznik_poprawnych}", flush=True)
+                proby_na_slowo[hint] = 0
+
             elif "niepoprawnie" in status_lower or "źle" in status_lower:
                 if not juz_ocenione:
                     ocenione[hint] = "wrong"
@@ -346,10 +366,10 @@ def main():
                     do_powtorzenia[hint] = "case"
                     print(f"     Zła wielkość liter – wróci.", flush=True)
 
-            elif "literówka" in status_lower or "synonim" in status_lower:
+            elif "literówka" in status_lower:
                 if hint and not juz_ocenione:
                     do_powtorzenia[hint] = "typo"
-                    print(f"     Literówka/Synonim – wróci.", flush=True)
+                    print(f"     Literówka – wróci.", flush=True)
 
             time.sleep(random.uniform(1, 2))
             try:
