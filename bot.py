@@ -9,6 +9,7 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -36,15 +37,20 @@ def zapisz_json(plik, dane):
         json.dump(dane, f, ensure_ascii=False, indent=2)
 
 
-def clean_text(text):
-    """Usuwa śmieci HTML, nawiasy, średniki i polskie znaki."""
+def clean_html(text):
+    """Usuwa tylko śmieci HTML i nawiasy, zostawia polskie znaki."""
     if not text:
         return ""
-    text = re.sub(r'<.*?>', '', text)          # usuwa tagi HTML
-    text = re.sub(r'\(.*?\)', '', text)        # usuwa (british english)
-    text = re.sub(r'\[.*?\]', '', text)        # usuwa [sth]
-    text = text.split(';')[0].split(',')[0]    # bierze tylko pierwszy wariant
-    # usuwa polskie znaki i akcenty (é -> e, itp.)
+    text = re.sub(r'<.*?>', '', text)
+    text = re.sub(r'\(.*?\)', '', text)
+    text = re.sub(r'\[.*?\]', '', text)
+    text = text.split(';')[0].split(',')[0]
+    return text.strip()
+
+
+def clean_english(text):
+    """Czyści angielski tekst (usuwa akcenty, kropki itp.)."""
+    text = clean_html(text)
     text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
     return text.strip().rstrip('.')
 
@@ -52,6 +58,7 @@ def clean_text(text):
 def tlumacz(tekst):
     if not tekst:
         return ""
+    tekst = clean_html(tekst) # Tłumaczymy czysty polski tekst (z zachowaniem ą, ę, ł)
     wynik = ""
     try:
         r = requests.get(
@@ -75,13 +82,14 @@ def tlumacz(tekst):
             print(f"Błąd tłumaczenia: {e}", flush=True)
             return tekst
             
-    return clean_text(wynik)
+    return clean_english(wynik)
 
 
 def popraw_format(tekst, hint):
     if not tekst:
         return tekst
-    tekst = clean_text(tekst)
+    tekst = clean_english(tekst)
+    hint = clean_html(hint)
     if hint and hint[0].islower():
         return tekst.lower()
     return tekst[0].upper() + tekst[1:]
@@ -117,7 +125,7 @@ def zrob_blad(slowo):
 def get_text_js(driver, by, selector):
     try:
         el = driver.find_element(by, selector)
-        return clean_text(driver.execute_script("return arguments[0].textContent", el).strip())
+        return clean_html(driver.execute_script("return arguments[0].textContent", el).strip())
     except Exception:
         return ""
 
@@ -138,7 +146,7 @@ def wyciagnij_poprawna(status_text):
         return ""
     m = re.search(r"Poprawna odpowied[źz]?:?\s*(.+)", status_text, re.IGNORECASE)
     if m:
-        return clean_text(m.group(1).split("\n")[0].strip())
+        return clean_english(m.group(1).split("\n")[0].strip())
     return ""
 
 
@@ -180,16 +188,18 @@ def wybierz_akcje(licznik_poprawnych, liczba_bledow):
 
 
 def kliknij_dalej(driver):
-    try:
-        driver.find_element(By.XPATH,
-            "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')] | //button[contains(text(), 'Kontynuuj')]").click()
-    except Exception:
+    for text in ['Dalej', 'Następne', 'Kontynuuj', 'Przejdź dalej']:
         try:
-            btn = driver.find_element(By.XPATH,
-                "//button[contains(text(), 'Dalej')] | //button[contains(text(), 'Następne')]")
-            driver.execute_script("arguments[0].click();", btn)
+            btns = driver.find_elements(By.XPATH, f"//button[contains(text(), '{text}')]")
+            for btn in btns:
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                    time.sleep(0.5)
+                    driver.execute_script("arguments[0].click();", btn)
+                    return True
         except Exception:
             pass
+    return False
 
 
 def main():
@@ -197,7 +207,8 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    losowe_opoznienie = 0  # TEST
+    # DOCELOWE OPÓŹNIENIE 0-3H
+    losowe_opoznienie = random.randint(0, 10800)  # 0-3h
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
     time.sleep(losowe_opoznienie)
@@ -215,7 +226,7 @@ def main():
 
     do_powtorzenia = {}
     ocenione = {}
-    proby_na_slowo = {}
+    proby_na_pytanie = {}
     liczba_bledow = 0
     licznik_poprawnych = 0
 
@@ -258,7 +269,6 @@ def main():
         poprzednie_pytanie = ""
 
         for i in range(maks_proby):
-            # Jeśli oba plany wykonane, kończymy
             if licznik_poprawnych >= POPRAWNE_ZA_PIERWSZYM and liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
                 print("Osiągnięto oba plany. Kończę.", flush=True)
                 break
@@ -279,11 +289,10 @@ def main():
             print(f"\n[{i+1}] PL: '{hint}' | EN: '{pytanie[:50]}'", flush=True)
             print(f"     Postęp: popr={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, bł={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
 
-            proby_na_slowo[hint] = proby_na_slowo.get(hint, 0) + 1
+            proby_na_pytanie[pytanie] = proby_na_pytanie.get(pytanie, 0) + 1
             
-            # TWARDA BLOKADA PĘTLI
-            if proby_na_slowo[hint] > 4:
-                print(f"     UWAGA: '{hint}' utknęło. Klikam Dalej bez wpisywania.", flush=True)
+            if proby_na_pytanie[pytanie] > 3:
+                print(f"     UWAGA: To pytanie pojawiło się 3 razy. Klikam Dalej na ślepo.", flush=True)
                 kliknij_dalej(driver)
                 time.sleep(2)
                 continue
@@ -304,7 +313,6 @@ def main():
                 print(f"     Już ocenione – poprawiam: {odp}", flush=True)
             elif hint in do_powtorzenia:
                 baza = popraw_format(tlumacz(hint), hint)
-                
                 if liczba_bledow >= DOCELOWA_LICZBA_BLEDOW:
                     odp = trudne.get(hint) or baza
                     print(f"     Dość błędów! Wpisuję poprawnie: {odp}", flush=True)
@@ -361,12 +369,10 @@ def main():
             status_lower = status.lower()
 
             if "dobrze" in status_lower or "synonim" in status_lower:
-                # Zarówno Dobrze jak i Synonim są OK
                 if not juz_ocenione:
                     ocenione[hint] = "correct"
                     licznik_poprawnych += 1
-                    print(f"     >>> ZALICZONE (Dobrze/Synonim). Popr: {licznik_poprawnych}", flush=True)
-                proby_na_slowo[hint] = 0
+                    print(f"     >>> ZALICZONE. Popr: {licznik_poprawnych}", flush=True)
 
             elif "niepoprawnie" in status_lower or "źle" in status_lower:
                 if not juz_ocenione:
@@ -385,8 +391,16 @@ def main():
                     print(f"     Literówka – wróci.", flush=True)
 
             time.sleep(random.uniform(1, 2))
-            kliknij_dalej(driver)
-            time.sleep(random.uniform(1, 3))
+            
+            sukces_dalej = kliknij_dalej(driver)
+            if not sukces_dalej:
+                try:
+                    pole = driver.find_element(By.ID, "answer")
+                    pole.send_keys(Keys.ENTER)
+                except Exception:
+                    pass
+
+            time.sleep(random.uniform(2, 4))
 
         print(f"\nKONIEC. Poprawnych: {licznik_poprawnych}, błędów: {liczba_bledow}", flush=True)
 
