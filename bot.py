@@ -38,7 +38,6 @@ def zapisz_json(plik, dane):
 
 
 def clean_html(text):
-    """Usuwa tylko śmieci HTML i nawiasy, zostawia polskie znaki."""
     if not text:
         return ""
     text = re.sub(r'<.*?>', '', text)
@@ -49,7 +48,6 @@ def clean_html(text):
 
 
 def clean_english(text):
-    """Czyści angielski tekst (usuwa akcenty, kropki itp.)."""
     text = clean_html(text)
     text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
     return text.strip().rstrip('.')
@@ -58,31 +56,33 @@ def clean_english(text):
 def tlumacz(tekst):
     if not tekst:
         return ""
-    tekst = clean_html(tekst) # Tłumaczymy czysty polski tekst (z zachowaniem ą, ę, ł)
-    wynik = ""
+    tekst = clean_html(tekst)
+    
+    # 1. Próba MyMemory
     try:
         r = requests.get(
             "https://api.mymemory.translated.net/get",
             params={"q": tekst, "langpair": "pl|en"},
-            timeout=10,
+            timeout=5,
         )
         wynik = r.json()["responseData"]["translatedText"].strip()
+        if wynik and "MYMEMORY WARNING" not in wynik.upper() and "QUERY LENGTH LIMIT" not in wynik.upper() and "NO QUERY" not in wynik.upper():
+            return clean_english(wynik)
     except Exception:
         pass
-        
-    if not wynik or "NO QUERY" in wynik.upper():
-        try:
-            r = requests.get(
-                "https://translate.googleapis.com/translate_a/single",
-                params={"client": "gtx", "sl": "pl", "tl": "en", "dt": "t", "q": tekst},
-                timeout=10,
-            )
-            wynik = r.json()[0][0][0].strip()
-        except Exception as e:
-            print(f"Błąd tłumaczenia: {e}", flush=True)
-            return tekst
-            
-    return clean_english(wynik)
+
+    # 2. Próba Google Translate (jeśli MyMemory padnie)
+    try:
+        r = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": "pl", "tl": "en", "dt": "t", "q": tekst},
+            timeout=5,
+        )
+        wynik = r.json()[0][0][0].strip()
+        return clean_english(wynik)
+    except Exception as e:
+        print(f"Błąd tłumaczenia (Google): {e}", flush=True)
+        return tekst
 
 
 def popraw_format(tekst, hint):
@@ -187,6 +187,21 @@ def wybierz_akcje(licznik_poprawnych, liczba_bledow):
     return "blad"
 
 
+def kliknij_sprawdz(driver):
+    for text in ['Sprawdź', 'Zatwierdź']:
+        try:
+            btns = driver.find_elements(By.XPATH, f"//button[contains(text(), '{text}')]")
+            for btn in btns:
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                    time.sleep(0.5)
+                    driver.execute_script("arguments[0].click();", btn)
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def kliknij_dalej(driver):
     for text in ['Dalej', 'Następne', 'Kontynuuj', 'Przejdź dalej']:
         try:
@@ -207,7 +222,6 @@ def main():
         print("Bot wyłączony – minęła data 2027-06-01.", flush=True)
         return
 
-    # DOCELOWE OPÓŹNIENIE 0-3H
     losowe_opoznienie = random.randint(0, 10800)  # 0-3h
     print(f"Bot startuje za {losowe_opoznienie} sekund...", flush=True)
     print(f"Plan: {POPRAWNE_ZA_PIERWSZYM} poprawnych, {DOCELOWA_LICZBA_BLEDOW} błędów", flush=True)
@@ -226,7 +240,7 @@ def main():
 
     do_powtorzenia = {}
     ocenione = {}
-    proby_na_pytanie = {}
+    ostatnie_pytania = []
     liczba_bledow = 0
     licznik_poprawnych = 0
 
@@ -289,12 +303,25 @@ def main():
             print(f"\n[{i+1}] PL: '{hint}' | EN: '{pytanie[:50]}'", flush=True)
             print(f"     Postęp: popr={licznik_poprawnych}/{POPRAWNE_ZA_PIERWSZYM}, bł={liczba_bledow}/{DOCELOWA_LICZBA_BLEDOW}", flush=True)
 
-            proby_na_pytanie[pytanie] = proby_na_pytanie.get(pytanie, 0) + 1
-            
-            if proby_na_pytanie[pytanie] > 3:
-                print(f"     UWAGA: To pytanie pojawiło się 3 razy. Klikam Dalej na ślepo.", flush=True)
-                kliknij_dalej(driver)
-                time.sleep(2)
+            # Wykrywanie zapętlenia (to samo pytanie 4 razy z rzędu)
+            ostatnie_pytania.append(pytanie)
+            if len(ostatnie_pytania) > 4:
+                ostatnie_pytania.pop(0)
+                
+            if len(ostatnie_pytania) == 4 and len(set(ostatnie_pytania)) == 1:
+                print(f"     UWAGA: To samo pytanie 4 razy z rzędu. Wymuszam przejście dalej.", flush=True)
+                try:
+                    # Wpisujemy "x", żeby odblokować przycisk "Sprawdź"
+                    pole = driver.find_element(By.ID, "answer")
+                    pole.clear()
+                    pole.send_keys("x")
+                    time.sleep(1)
+                    kliknij_sprawdz(driver)
+                    time.sleep(2)
+                    kliknij_dalej(driver)
+                    ostatnie_pytania = []
+                except Exception as e:
+                    print(f"     Błąd wymuszania: {e}", flush=True)
                 continue
 
             juz_ocenione = hint in ocenione
@@ -343,14 +370,7 @@ def main():
                 break
 
             time.sleep(random.uniform(1, 2))
-            try:
-                driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]").click()
-            except Exception:
-                try:
-                    btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Sprawdź')]")
-                    driver.execute_script("arguments[0].click();", btn)
-                except Exception:
-                    break
+            kliknij_sprawdz(driver)
 
             time.sleep(random.uniform(2, 4))
             status = get_text_js(driver, By.ID, "sr_status")
